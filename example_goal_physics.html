@@ -1,0 +1,644 @@
+<html lang="en">
+
+<head>
+    <title>Ammo.js Goal Net Prototype</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body {
+            color: #61443e;
+            font-family: Monospace;
+            font-size: 13px;
+            text-align: center;
+            background-color: #bfd1e5;
+            margin: 0px;
+            overflow: hidden;
+        }
+
+        #info {
+            position: absolute;
+            top: 0px;
+            width: 100%;
+            padding: 5px;
+        }
+
+        a {
+            color: #a06851;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">Ammo.js Goal Net Prototype<br>Unified Box Net (Seamless)<br>Press SPACE to shoot!</div>
+    <div id="container"></div>
+
+    <!-- CDNs -->
+    <script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@HEAD/builds/ammo.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+
+        Ammo().then(function (Ammo) {
+
+            // - Global variables -
+
+            // Graphics variables
+            var container;
+            var camera, controls, scene, renderer;
+            var textureLoader;
+            var clock = new THREE.Clock();
+
+            // Physics variables
+            var gravityConstant = -9.8;
+            var collisionConfiguration;
+            var dispatcher;
+            var broadphase;
+            var solver;
+            var softBodySolver;
+            var physicsWorld;
+            var rigidBodies = [];
+            var margin = 0.05;
+            var cloth; // The Unified Net
+            var sphere;
+            var transformAux1 = new Ammo.btTransform();
+
+            var time = 0;
+
+            // - Main code -
+
+            init();
+            animate();
+
+
+            // - Functions -
+
+            function init() {
+
+                initGraphics();
+
+                initPhysics();
+
+                createObjects();
+
+                initInput();
+
+            }
+
+            function initInput() {
+                window.addEventListener('keydown', function (event) {
+                    if (event.code === 'Space') {
+                        shootSphere();
+                    }
+                });
+            }
+
+            function shootSphere() {
+                if (!sphere) return;
+
+                var physicsBody = sphere.userData.physicsBody;
+
+                // Reset position
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(0, 2, 10)); // Start further back
+                transform.setRotation(new Ammo.btQuaternion(0, 0, 0, 1));
+                physicsBody.setWorldTransform(transform);
+                physicsBody.getMotionState().setWorldTransform(transform);
+
+                // Reset velocities
+                physicsBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                physicsBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+
+                // Activate
+                physicsBody.setActivationState(4); // DISABLE_DEACTIVATION
+
+                // Shoot
+                // Aim at random height in goal
+                var targetY = 1 + Math.random() * 1.5;
+                var targetX = (Math.random() - 0.5) * 4;
+
+                // Calculate velocity vector
+                // Start: (0, 2, 10) -> Target: (targetX, targetY, 0)
+                var velocity = new Ammo.btVector3(targetX, targetY - 2, -10);
+                velocity.op_mul(2); // Speed multiplier
+
+                physicsBody.setLinearVelocity(velocity);
+            }
+
+            function initGraphics() {
+
+                container = document.getElementById('container');
+
+                camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 2000);
+
+                scene = new THREE.Scene();
+
+                camera.position.x = -12;
+                camera.position.y = 7;
+                camera.position.z = 15;
+                camera.lookAt(0, 2, 0);
+
+                renderer = new THREE.WebGLRenderer();
+                renderer.setClearColor(0xbfd1e5);
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.shadowMap.enabled = true;
+
+                // OrbitControls must be initialized AFTER renderer
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.target.set(0, 2, 0);
+
+                textureLoader = new THREE.TextureLoader();
+
+                var ambientLight = new THREE.AmbientLight(0x404040);
+                scene.add(ambientLight);
+
+                var light = new THREE.DirectionalLight(0xffffff, 1);
+                light.position.set(-7, 10, 15);
+                light.castShadow = true;
+                var d = 10;
+                light.shadow.camera.left = -d;
+                light.shadow.camera.right = d;
+                light.shadow.camera.top = d;
+                light.shadow.camera.bottom = -d;
+
+                light.shadow.camera.near = 2;
+                light.shadow.camera.far = 50;
+
+                light.shadow.mapSize.x = 1024;
+                light.shadow.mapSize.y = 1024;
+
+                light.shadow.bias = -0.01;
+
+                scene.add(light);
+
+                container.innerHTML = "";
+
+                container.appendChild(renderer.domElement);
+
+                window.addEventListener('resize', onWindowResize, false);
+
+            }
+
+            function initPhysics() {
+
+                // Physics configuration
+                collisionConfiguration = new Ammo.btSoftBodyRigidBodyCollisionConfiguration();
+                dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
+                broadphase = new Ammo.btDbvtBroadphase();
+                solver = new Ammo.btSequentialImpulseConstraintSolver();
+                softBodySolver = new Ammo.btDefaultSoftBodySolver();
+                physicsWorld = new Ammo.btSoftRigidDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration, softBodySolver);
+                physicsWorld.setGravity(new Ammo.btVector3(0, gravityConstant, 0));
+                physicsWorld.getWorldInfo().set_m_gravity(new Ammo.btVector3(0, gravityConstant, 0));
+
+            }
+
+            function createObjects() {
+
+                var pos = new THREE.Vector3();
+                var quat = new THREE.Quaternion();
+
+                // Ground
+                pos.set(0, - 0.5, 0);
+                quat.set(0, 0, 0, 1);
+                var ground = createParalellepiped(40, 1, 40, 0, pos, quat, new THREE.MeshPhongMaterial({ color: 0xFFFFFF }));
+                ground.castShadow = true;
+                ground.receiveShadow = true;
+
+                var gridHelper = new THREE.GridHelper(40, 40, 0x000000, 0x000000);
+                gridHelper.position.y = 0.01;
+                scene.add(gridHelper);
+
+                // Goal Dimensions
+                var goalWidth = 6;
+                var goalHeight = 3;
+                var goalDepth = 2;
+                var postRadius = 0.1;
+                var goalPos = new THREE.Vector3(0, 0, 0);
+
+                // Goal Frame Material
+                var frameMaterial = new THREE.MeshPhongMaterial({ color: 0x606060 });
+
+                // -- Front Frame --
+                // Left Post
+                pos.set(goalPos.x - goalWidth / 2, goalHeight / 2, goalPos.z);
+                quat.set(0, 0, 0, 1);
+                var leftPost = createParalellepiped(postRadius * 2, goalHeight, postRadius * 2, 0, pos, quat, frameMaterial);
+                leftPost.castShadow = true;
+                leftPost.receiveShadow = true;
+
+                // Right Post
+                pos.set(goalPos.x + goalWidth / 2, goalHeight / 2, goalPos.z);
+                quat.set(0, 0, 0, 1);
+                var rightPost = createParalellepiped(postRadius * 2, goalHeight, postRadius * 2, 0, pos, quat, frameMaterial);
+                rightPost.castShadow = true;
+                rightPost.receiveShadow = true;
+
+                // Crossbar
+                pos.set(goalPos.x, goalHeight, goalPos.z);
+                quat.set(0, 0, 0, 1);
+                var crossbar = createParalellepiped(goalWidth + postRadius * 2, postRadius * 2, postRadius * 2, 0, pos, quat, frameMaterial);
+                crossbar.castShadow = true;
+                crossbar.receiveShadow = true;
+
+                // -- Back Support Poles --
+                var backPostHeight = 4; // Higher than crossbar
+                var backPostZ = goalPos.z - goalDepth;
+
+                // Back Left Post
+                pos.set(goalPos.x - goalWidth / 2, backPostHeight / 2, backPostZ);
+                quat.set(0, 0, 0, 1);
+                var backLeftPost = createParalellepiped(postRadius * 1, backPostHeight, postRadius * 1, 0, pos, quat, frameMaterial);
+                backLeftPost.castShadow = true;
+                backLeftPost.receiveShadow = true;
+
+                // Back Right Post
+                pos.set(goalPos.x + goalWidth / 2, backPostHeight / 2, backPostZ);
+                quat.set(0, 0, 0, 1);
+                var backRightPost = createParalellepiped(postRadius * 1, backPostHeight, postRadius * 1, 0, pos, quat, frameMaterial);
+                backRightPost.castShadow = true;
+                backRightPost.receiveShadow = true;
+
+                // -- Back Tension Rope --
+                var ropeRadius = 0.02;
+                pos.set(goalPos.x, goalHeight, backPostZ);
+                quat.set(0, 0, 0, 1);
+                var backTensionRope = createParalellepiped(goalWidth, ropeRadius * 2, ropeRadius * 2, 0, pos, quat, new THREE.MeshPhongMaterial({ color: 0x000000 }));
+                backTensionRope.castShadow = true;
+                backTensionRope.receiveShadow = true;
+
+                // -- Side Tension Ropes (Left and Right) --
+                var sideRopeLength = goalDepth;
+
+                // Left Side Rope
+                pos.set(goalPos.x - goalWidth / 2, goalHeight, goalPos.z - goalDepth / 2);
+                quat.set(0, 0, 0, 1);
+                var leftSideRope = createParalellepiped(ropeRadius * 2, ropeRadius * 2, sideRopeLength, 0, pos, quat, new THREE.MeshPhongMaterial({ color: 0x000000 }));
+                leftSideRope.castShadow = true;
+                leftSideRope.receiveShadow = true;
+
+                // Right Side Rope
+                pos.set(goalPos.x + goalWidth / 2, goalHeight, goalPos.z - goalDepth / 2);
+                quat.set(0, 0, 0, 1);
+                var rightSideRope = createParalellepiped(ropeRadius * 2, ropeRadius * 2, sideRopeLength, 0, pos, quat, new THREE.MeshPhongMaterial({ color: 0x000000 }));
+                rightSideRope.castShadow = true;
+                rightSideRope.receiveShadow = true;
+
+                // -- Unified Box Net Generation --
+
+                // Dimensions
+                var w = goalWidth;
+                var h = goalHeight;
+                var d = goalDepth;
+
+                // Segments
+                var segW = Math.ceil(w * 3); // Segments per meter
+                var segH = Math.ceil(h * 3);
+                var segD = Math.ceil(d * 3);
+
+                // Vertices and Indices
+                var vertices = [];
+                var indices = [];
+                var vertexMap = {}; // "x,y,z" -> index
+
+                function getVertexIndex(x, y, z) {
+                    // Quantize to avoid floating point issues
+                    var key = x.toFixed(3) + "," + y.toFixed(3) + "," + z.toFixed(3);
+                    if (vertexMap[key] !== undefined) {
+                        return vertexMap[key];
+                    }
+                    var index = vertices.length / 3;
+                    vertices.push(x, y, z);
+                    vertexMap[key] = index;
+                    return index;
+                }
+
+                function addQuad(p1, p2, p3, p4) {
+                    // p1-p2-p4, p2-p3-p4 (CCW)
+                    indices.push(p1, p2, p4);
+                    indices.push(p2, p3, p4);
+                }
+
+                // 1. Roof (y=h, z=0 to -d, x=-w/2 to w/2)
+                for (var iz = 0; iz < segD; iz++) {
+                    for (var ix = 0; ix < segW; ix++) {
+                        var z0 = - (iz / segD) * d;
+                        var z1 = - ((iz + 1) / segD) * d;
+                        var x0 = (ix / segW) * w - w / 2;
+                        var x1 = ((ix + 1) / segW) * w - w / 2;
+
+                        var p1 = getVertexIndex(x0, h, z0); // TL
+                        var p2 = getVertexIndex(x0, h, z1); // BL
+                        var p3 = getVertexIndex(x1, h, z1); // BR
+                        var p4 = getVertexIndex(x1, h, z0); // TR
+
+                        // Order: p1, p2, p3, p4 (CCW?)
+                        addQuad(p1, p2, p3, p4);
+                    }
+                }
+
+                // 2. Back (z=-d, y=h to -1.0, x=-w/2 to w/2)
+                var extraDrop = 1.0;
+                var totalH = h + extraDrop;
+                var segHTotal = Math.ceil(totalH * 3);
+
+                for (var iy = 0; iy < segHTotal; iy++) {
+                    for (var ix = 0; ix < segW; ix++) {
+                        var y0 = h - (iy / segHTotal) * totalH;
+                        var y1 = h - ((iy + 1) / segHTotal) * totalH;
+                        var x0 = (ix / segW) * w - w / 2;
+                        var x1 = ((ix + 1) / segW) * w - w / 2;
+
+                        // Logic: If y < 0, clamp to 0 and shift z backwards by the amount y is below 0
+                        var z0 = -d;
+                        var z1 = -d;
+
+                        if (y0 < 0) { z0 += y0; y0 = 0; }
+                        if (y1 < 0) { z1 += y1; y1 = 0; }
+
+                        var p1 = getVertexIndex(x0, y0, z0); // TL
+                        var p2 = getVertexIndex(x0, y1, z1); // BL
+                        var p3 = getVertexIndex(x1, y1, z1); // BR
+                        var p4 = getVertexIndex(x1, y0, z0); // TR
+
+                        addQuad(p1, p2, p3, p4);
+                    }
+                }
+
+                // 3. Left Side (x=-w/2, y=h to -1.0, z=0 to -d)
+                for (var iy = 0; iy < segHTotal; iy++) {
+                    for (var iz = 0; iz < segD; iz++) {
+                        var y0 = h - (iy / segHTotal) * totalH;
+                        var y1 = h - ((iy + 1) / segHTotal) * totalH;
+                        var z0_orig = - (iz / segD) * d;
+                        var z1_orig = - ((iz + 1) / segD) * d;
+
+                        var p1_z = z0_orig + (y0 < 0 ? y0 : 0);
+                        var p2_z = z1_orig + (y0 < 0 ? y0 : 0);
+                        var p3_z = z1_orig + (y1 < 0 ? y1 : 0);
+                        var p4_z = z0_orig + (y1 < 0 ? y1 : 0);
+
+                        var p1_y = Math.max(0, y0);
+                        var p2_y = Math.max(0, y0);
+                        var p3_y = Math.max(0, y1);
+                        var p4_y = Math.max(0, y1);
+
+                        // Normal pointing left (-x)
+                        var v1 = getVertexIndex(-w / 2, p1_y, p1_z);
+                        var v2 = getVertexIndex(-w / 2, p2_y, p2_z);
+                        var v3 = getVertexIndex(-w / 2, p3_y, p3_z);
+                        var v4 = getVertexIndex(-w / 2, p4_y, p4_z);
+
+                        addQuad(v1, v2, v3, v4);
+                    }
+                }
+
+                // 4. Right Side (x=w/2, y=h to -1.0, z=0 to -d)
+                for (var iy = 0; iy < segHTotal; iy++) {
+                    for (var iz = 0; iz < segD; iz++) {
+                        var y0 = h - (iy / segHTotal) * totalH;
+                        var y1 = h - ((iy + 1) / segHTotal) * totalH;
+                        var z0_orig = - (iz / segD) * d;
+                        var z1_orig = - ((iz + 1) / segD) * d;
+
+                        var p1_z = z0_orig + (y0 < 0 ? y0 : 0);
+                        var p2_z = z1_orig + (y0 < 0 ? y0 : 0);
+                        var p3_z = z1_orig + (y1 < 0 ? y1 : 0);
+                        var p4_z = z0_orig + (y1 < 0 ? y1 : 0);
+
+                        var p1_y = Math.max(0, y0);
+                        var p2_y = Math.max(0, y0);
+                        var p3_y = Math.max(0, y1);
+                        var p4_y = Math.max(0, y1);
+
+                        // Normal pointing right (+x)
+                        var v1 = getVertexIndex(w / 2, p1_y, p1_z);
+                        var v2 = getVertexIndex(w / 2, p2_y, p2_z);
+                        var v3 = getVertexIndex(w / 2, p3_y, p3_z);
+                        var v4 = getVertexIndex(w / 2, p4_y, p4_z);
+
+                        // Reverse order for Right side to face out
+                        addQuad(v1, v4, v3, v2);
+                    }
+                }
+
+                // Create BufferGeometry
+                var geometry = new THREE.BufferGeometry();
+                geometry.setIndex(indices);
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                geometry.translate(goalPos.x, goalPos.y, goalPos.z);
+
+                var material = new THREE.MeshLambertMaterial({ color: 0xFFFFFF, side: THREE.DoubleSide, wireframe: true });
+                cloth = new THREE.Mesh(geometry, material);
+                cloth.castShadow = true;
+                cloth.receiveShadow = true;
+                scene.add(cloth);
+
+                // Create Soft Body from TriMesh
+                var softBodyHelpers = new Ammo.btSoftBodyHelpers();
+                var clothSoftBody = softBodyHelpers.CreateFromTriMesh(
+                    physicsWorld.getWorldInfo(),
+                    vertices,
+                    indices,
+                    indices.length / 3,
+                    true
+                );
+
+                var sbConfig = clothSoftBody.get_m_cfg();
+                sbConfig.set_viterations(20);
+                sbConfig.set_piterations(20);
+                sbConfig.set_collisions(0x11); // SDF_RS | CL_SS
+                clothSoftBody.setTotalMass(2.0, false);
+                Ammo.castObject(clothSoftBody, Ammo.btCollisionObject).getCollisionShape().setMargin(margin * 3);
+                physicsWorld.addSoftBody(clothSoftBody, 1, -1);
+                cloth.userData.physicsBody = clothSoftBody;
+                clothSoftBody.setActivationState(4);
+
+                // -- Anchoring --
+                var nodes = clothSoftBody.get_m_nodes();
+                var nNodes = nodes.size();
+
+                function anchorLine(pStart, pEnd, body) {
+                    var tol = 0.1;
+                    var vLine = new THREE.Vector3().subVectors(pEnd, pStart);
+                    var lenSq = vLine.lengthSq();
+                    for (var i = 0; i < nNodes; i++) {
+                        var node = nodes.at(i);
+                        var pos = node.get_m_x();
+                        var p = new THREE.Vector3(pos.x() - goalPos.x, pos.y() - goalPos.y, pos.z() - goalPos.z);
+                        var vP = new THREE.Vector3().subVectors(p, pStart);
+                        var t = vP.dot(vLine) / lenSq;
+                        if (t >= 0 && t <= 1) {
+                            var closest = new THREE.Vector3().copy(pStart).add(vLine.clone().multiplyScalar(t));
+                            if (p.distanceTo(closest) < tol) {
+                                clothSoftBody.appendAnchor(i, body.userData.physicsBody, false, 1);
+                            }
+                        }
+                    }
+                }
+
+                anchorLine(new THREE.Vector3(-w / 2, h, 0), new THREE.Vector3(w / 2, h, 0), crossbar);
+                anchorLine(new THREE.Vector3(-w / 2, h, 0), new THREE.Vector3(-w / 2, 0, 0), leftPost);
+                anchorLine(new THREE.Vector3(w / 2, h, 0), new THREE.Vector3(w / 2, 0, 0), rightPost);
+                anchorLine(new THREE.Vector3(-w / 2, h, -d), new THREE.Vector3(w / 2, h, -d), backTensionRope);
+                anchorLine(new THREE.Vector3(-w / 2, h, 0), new THREE.Vector3(-w / 2, h, -d), leftSideRope);
+                anchorLine(new THREE.Vector3(w / 2, h, 0), new THREE.Vector3(w / 2, h, -d), rightSideRope);
+
+                // -- Visual Ropes --
+                var ropeMaterial = new THREE.LineBasicMaterial({ color: 0x000000 });
+                var ropeGeometryLeft = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(goalPos.x - goalWidth / 2, goalHeight, backPostZ),
+                    new THREE.Vector3(goalPos.x - goalWidth / 2, backPostHeight, backPostZ)
+                ]);
+                var ropeLeft = new THREE.Line(ropeGeometryLeft, ropeMaterial);
+                scene.add(ropeLeft);
+
+                var ropeGeometryRight = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(goalPos.x + goalWidth / 2, goalHeight, backPostZ),
+                    new THREE.Vector3(goalPos.x + goalWidth / 2, backPostHeight, backPostZ)
+                ]);
+                var ropeRight = new THREE.Line(ropeGeometryRight, ropeMaterial);
+                scene.add(ropeRight);
+
+                // Sphere
+                var sphereMass = 1;
+                var sphereRadius = 0.5;
+                pos.set(0, 2, 10);
+                quat.set(0, 0, 0, 1);
+                sphere = createSphere(sphereRadius, sphereMass, pos, quat, new THREE.MeshPhongMaterial({ color: 0xFF0000 }));
+                sphere.castShadow = true;
+                sphere.receiveShadow = true;
+
+            }
+
+            function createParalellepiped(sx, sy, sz, mass, pos, quat, material) {
+                var threeObject = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz, 1, 1, 1), material);
+                var shape = new Ammo.btBoxShape(new Ammo.btVector3(sx * 0.5, sy * 0.5, sz * 0.5));
+                shape.setMargin(margin);
+                createRigidBody(threeObject, shape, mass, pos, quat);
+                return threeObject;
+            }
+
+            function createSphere(radius, mass, pos, quat, material) {
+                var threeObject = new THREE.Mesh(new THREE.SphereGeometry(radius, 32, 32), material);
+                var shape = new Ammo.btSphereShape(radius);
+                shape.setMargin(margin);
+                createRigidBody(threeObject, shape, mass, pos, quat);
+
+                // Enable CCD
+                var body = threeObject.userData.physicsBody;
+                body.setCcdMotionThreshold(radius);
+                body.setCcdSweptSphereRadius(radius * 0.2);
+
+                return threeObject;
+            }
+
+            function createRigidBody(threeObject, physicsShape, mass, pos, quat) {
+
+                threeObject.position.copy(pos);
+                threeObject.quaternion.copy(quat);
+
+                var transform = new Ammo.btTransform();
+                transform.setIdentity();
+                transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+                transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+                var motionState = new Ammo.btDefaultMotionState(transform);
+
+                var localInertia = new Ammo.btVector3(0, 0, 0);
+                if (mass > 0) {
+                    physicsShape.calculateLocalInertia(mass, localInertia);
+                }
+
+                var rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, physicsShape, localInertia);
+                var body = new Ammo.btRigidBody(rbInfo);
+
+                threeObject.userData.physicsBody = body;
+
+                scene.add(threeObject);
+
+                if (mass > 0) {
+                    rigidBodies.push(threeObject);
+                    body.setActivationState(4);
+                }
+
+                physicsWorld.addRigidBody(body);
+
+            }
+
+            function onWindowResize() {
+
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+
+                renderer.setSize(window.innerWidth, window.innerHeight);
+
+            }
+
+            function animate() {
+
+                requestAnimationFrame(animate);
+
+                render();
+
+            }
+
+            function render() {
+
+                var deltaTime = clock.getDelta();
+
+                updatePhysics(deltaTime);
+
+                controls.update(deltaTime);
+
+                renderer.render(scene, camera);
+
+                time += deltaTime;
+
+            }
+
+            function updatePhysics(deltaTime) {
+
+                physicsWorld.stepSimulation(deltaTime, 10);
+
+                // Update cloth
+                var softBody = cloth.userData.physicsBody;
+                var clothPositions = cloth.geometry.attributes.position.array;
+                var numVerts = clothPositions.length / 3;
+                var nodes = softBody.get_m_nodes();
+                var indexFloat = 0;
+                for (var i = 0; i < numVerts; i++) {
+                    var node = nodes.at(i);
+                    var nodePos = node.get_m_x();
+                    clothPositions[indexFloat++] = nodePos.x();
+                    clothPositions[indexFloat++] = nodePos.y();
+                    clothPositions[indexFloat++] = nodePos.z();
+                }
+                cloth.geometry.computeVertexNormals();
+                cloth.geometry.attributes.position.needsUpdate = true;
+                cloth.geometry.attributes.normal.needsUpdate = true;
+
+                // Update rigid bodies
+                for (var i = 0, il = rigidBodies.length; i < il; i++) {
+                    var objThree = rigidBodies[i];
+                    var objPhys = objThree.userData.physicsBody;
+                    var ms = objPhys.getMotionState();
+                    if (ms) {
+                        ms.getWorldTransform(transformAux1);
+                        var p = transformAux1.getOrigin();
+                        var q = transformAux1.getRotation();
+                        objThree.position.set(p.x(), p.y(), p.z());
+                        objThree.quaternion.set(q.x(), q.y(), q.z(), q.w());
+                    }
+                }
+
+            }
+
+        });
+
+    </script>
+
+</body>
+
+</html>
